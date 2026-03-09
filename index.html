@@ -21,6 +21,7 @@
   body::before{content:'';position:fixed;top:50%;left:50%;width:250vmax;height:250vmax;transform:translate(-50%,-50%);background:repeating-radial-gradient(circle,transparent 0,transparent 4.8%,rgba(0,212,255,.018) 5%,rgba(0,212,255,.018) 5.2%);pointer-events:none;z-index:0;}
   body::after{content:'';position:fixed;top:50%;left:50%;width:250vmax;height:250vmax;transform:translate(-50%,-50%) rotate(0deg);background:conic-gradient(from 0deg,transparent 340deg,rgba(0,212,255,.07) 355deg,transparent 360deg);animation:sweep 5s linear infinite;pointer-events:none;z-index:0;}
   @keyframes sweep{to{transform:translate(-50%,-50%) rotate(360deg);}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
   .wrap{position:relative;z-index:1;max-width:1380px;margin:0 auto;padding:18px 20px;}
 
   header{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:18px;}
@@ -163,6 +164,19 @@
   .tk{font-family:var(--mono);font-size:.68rem;color:var(--accent);}
   .tb{height:4px;border-radius:2px;margin-top:5px;}
 
+  /* SPC tabs */
+  .spc-tab{background:var(--bg2);border:1px solid var(--border);border-radius:3px;padding:4px 14px;font-family:var(--mono);font-size:.68rem;color:var(--dim);cursor:pointer;letter-spacing:.08em;transition:all .2s;}
+  .spc-tab:hover{border-color:var(--accent);color:var(--accent);}
+  .spc-tab.active{background:rgba(0,212,255,.12);border-color:var(--accent);color:var(--accent);}
+  /* AI analysis */
+  #spc-ai-content{border-top:1px solid var(--border);padding-top:10px;}
+  #spc-ai-content .ai-loading{color:var(--dim);font-family:var(--mono);font-size:.7rem;display:flex;align-items:center;gap:8px;}
+  .ai-spinner{width:10px;height:10px;border:1px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;flex-shrink:0;}
+  .spc-local-badge{display:inline-block;background:rgba(0,212,255,.12);border:1px solid var(--accent);border-radius:3px;padding:1px 7px;font-family:var(--mono);font-size:.6rem;color:var(--accent);margin-left:8px;vertical-align:middle;}
+  .spc-risk-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(26,48,68,.5);font-size:.75rem;}
+  .spc-risk-row:last-child{border-bottom:none;}
+  .spc-risk-swatch{width:10px;height:10px;border-radius:2px;flex-shrink:0;}
+
   /* Radar */
   #radar-map{height:340px;width:100%;border-radius:3px;background:#050a0e;}
   #radar-map .leaflet-tile-pane{filter:saturate(1.3) brightness(0.85);}
@@ -229,6 +243,17 @@
       </div>
       <div id="risk-nums"></div>
     </div>
+    <div id="ai-analysis-panel" style="margin-bottom:16px;padding:14px 18px;border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:4px;background:var(--panel);">
+      <div style="font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;color:var(--dim);margin-bottom:8px;">🤖 ATMOSPHERIC ANALYSIS</div>
+      <div id="ai-analysis-text" style="font-size:.82rem;color:var(--text);line-height:1.8;">
+        <span style="color:var(--dim);font-family:var(--mono);font-size:.7rem;">Calculating...</span>
+      </div>
+      <div id="ai-analysis-time" style="font-family:var(--mono);font-size:.58rem;color:var(--dim);margin-top:8px;"></div>
+    </div>
+    <div class="panel gf" style="margin-bottom:16px;">
+      <div class="pt">Atmospheric Condition Alerts</div>
+      <div id="comp-alerts"></div>
+    </div>
     <div id="obs-strip"></div>
     <div class="g3">
       <div class="panel">
@@ -291,14 +316,7 @@
       <div class="pt">NWS Official Forecast — Jonesboro AR (LZK)</div>
       <div class="nws-periods" id="nws-periods"></div>
     </div>
-    <div class="panel gf" id="spc-panel">
-      <div class="pt">SPC Day 1 Convective Outlook</div>
-      <div id="spc-content"><span style="color:var(--dim);font-size:.75rem">Loading SPC outlook...</span></div>
-    </div>
-    <div class="panel gf">
-      <div class="pt">Atmospheric Condition Alerts</div>
-      <div id="comp-alerts"></div>
-    </div>
+
     <div class="panel gf">
       <div class="pt">Hourly Outlook — Next 24 Hours (HRRR)</div>
       <div id="timeline"></div>
@@ -489,9 +507,14 @@ function tornadoProb(params){
   let spcScore=0, spcRaw='—';
   try{
     if(spc&&spc.cat&&spc.torProb&&spc.sigTor){
-      const catFeats=Array.isArray(spc.cat)?spc.cat:[];
-      const torFeats=Array.isArray(spc.torProb)?spc.torProb:[];
-      const sigFeats=Array.isArray(spc.sigTor)?spc.sigTor:[];
+      const allCat =Array.isArray(spc.cat)?spc.cat:[];
+      const allTor =Array.isArray(spc.torProb)?spc.torProb:[];
+      const allSig =Array.isArray(spc.sigTor)?spc.sigTor:[];
+      // Filter to local point
+      const pip=f=>{try{return f.geometry&&pointInPolygon(LAT,LON,f.geometry);}catch{return false;}};
+      const catFeats=allCat.filter(pip);
+      const torFeats=allTor.filter(pip);
+      const sigFeats=allSig.filter(pip);
       const cp=catFeats[0]?.properties||{};
       const catLabel=String(cp.LABEL||cp.label||cp.DN||cp.dn||'').toUpperCase().trim();
       const tp=torFeats[0]?.properties||{};
@@ -745,10 +768,23 @@ async function loadNWS(){
 
 // SPC: fetch full GeoJSON files directly from spc.noaa.gov, then do point-in-polygon client-side
 // These static files have permissive CORS headers unlike the MapServer
-const SPC_URLS={
-  cat:    'https://www.spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson',
-  tor:    'https://www.spc.noaa.gov/products/outlook/day1otlk_torn.nolyr.geojson',
-  sigtor: 'https://www.spc.noaa.gov/products/outlook/day1otlk_sigtorn.nolyr.geojson',
+// SPC GeoJSON URLs — Day 1, 2, 3 categorical + tornado prob + sig tor
+const SPC_DAYS={
+  1:{
+    cat:    'https://www.spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson',
+    tor:    'https://www.spc.noaa.gov/products/outlook/day1otlk_torn.nolyr.geojson',
+    sigtor: 'https://www.spc.noaa.gov/products/outlook/day1otlk_sigtorn.nolyr.geojson',
+  },
+  2:{
+    cat:    'https://www.spc.noaa.gov/products/outlook/day2otlk_cat.nolyr.geojson',
+    tor:    'https://www.spc.noaa.gov/products/outlook/day2otlk_torn.nolyr.geojson',
+    sigtor: 'https://www.spc.noaa.gov/products/outlook/day2otlk_sigtorn.nolyr.geojson',
+  },
+  3:{
+    cat:    'https://www.spc.noaa.gov/products/outlook/day3otlk_cat.nolyr.geojson',
+    tor:    null, // Day 3 has no explicit tornado prob layer
+    sigtor: 'https://www.spc.noaa.gov/products/outlook/day3otlk_sigsvr.nolyr.geojson',
+  },
 };
 
 // Ray-casting point-in-polygon (handles MultiPolygon and Polygon)
@@ -760,7 +796,7 @@ function pointInPolygon(lat, lon, geometry){
     ? geometry.coordinates
     : [];
   for(const ring of polys){
-    const coords=ring[0]||ring; // outer ring
+    const coords=ring[0]||ring;
     let inside=false;
     for(let i=0,j=coords.length-1;i<coords.length;j=i++){
       const xi=coords[i][0],yi=coords[i][1];
@@ -773,45 +809,140 @@ function pointInPolygon(lat, lon, geometry){
 }
 
 async function spcFetch(url){
+  if(!url) return [];
   const r=await fetch(url);
-  if(!r.ok)throw new Error('SPC fetch HTTP '+r.status);
+  if(!r.ok) throw new Error('SPC fetch HTTP '+r.status);
   const j=await r.json();
   return Array.isArray(j.features)?j.features:[];
 }
 
+// Load all three days — return ALL features (not filtered to point)
+// Local hit detection happens in render
 async function loadSPC(){
-  const [catD, torD, sigD]=await Promise.allSettled([
-    spcFetch(SPC_URLS.cat),
-    spcFetch(SPC_URLS.tor),
-    spcFetch(SPC_URLS.sigtor),
-  ]);
-  // Filter each feature set to only those whose polygon contains our point
-  const filterHit=feats=>feats.filter(f=>{
-    try{return pointInPolygon(LAT,LON,f.geometry);}catch{return false;}
-  });
-  return{
-    cat:     catD.status==='fulfilled'  ? filterHit(catD.value)  : [],
-    torProb: torD.status==='fulfilled'  ? filterHit(torD.value)  : [],
-    sigTor:  sigD.status==='fulfilled'  ? filterHit(sigD.value)  : [],
-  };
+  const results={};
+  for(const day of [1,2,3]){
+    const urls=SPC_DAYS[day];
+    const [catD,torD,sigD]=await Promise.allSettled([
+      spcFetch(urls.cat),
+      spcFetch(urls.tor),
+      spcFetch(urls.sigtor),
+    ]);
+    results[day]={
+      cat:    catD.status==='fulfilled'?catD.value:[],
+      torProb:torD.status==='fulfilled'?torD.value:[],
+      sigTor: sigD.status==='fulfilled'?sigD.value:[],
+    };
+  }
+  return results;
 }
 
-// Categorical label → display info
-const CAT_INFO={
-  'TSTM':   {label:'TSTM',    short:'General Thunder',      color:'#558b2f', cls:'general', pts:2},
-  'MRGL':   {label:'MRGL',    short:'Marginal Risk',         color:'#66bb6a', cls:'mrgl',    pts:5},
-  'SLGT':   {label:'SLGT',    short:'Slight Risk',           color:'#ffee58', cls:'slgt',    pts:10},
-  'ENH':    {label:'ENH',     short:'Enhanced Risk',         color:'#ffa726', cls:'enh',     pts:16},
-  'MDT':    {label:'MDT',     short:'Moderate Risk',         color:'#ef5350', cls:'mdt',     pts:22},
-  'HIGH':   {label:'HIGH',    short:'High Risk',             color:'#b71c1c', cls:'high',    pts:28},
-};
+// ── Atmospheric Analysis — computed locally from parameters ─────────────────
+let _aiTypewriterTimer = null;
+
+function buildAnalysis(prob, params){
+  const {cape, cin, li, shLow, pwat, rh, pp} = params;
+  const pct = prob.pct;
+  const top = prob.factors.filter(f=>f.v>0).sort((a,b)=>b.v-a.v);
+  const topName = top[0]?.n || 'CAPE';
+  const sh = parseFloat(shLow)||0;
+
+  // Describe CAPE
+  const capeDesc = cape > 3000 ? `extreme instability (CAPE ${Math.round(cape)} J/kg)`
+    : cape > 1500 ? `strong instability (CAPE ${Math.round(cape)} J/kg)`
+    : cape > 750  ? `moderate instability (CAPE ${Math.round(cape)} J/kg)`
+    : cape > 250  ? `modest instability (CAPE ${Math.round(cape)} J/kg)`
+    : `weak instability (CAPE ${Math.round(cape)} J/kg)`;
+
+  // Describe shear
+  const shearDesc = sh > 18 ? `strong low-level wind shear (${sh.toFixed(1)} mph over 0–80m)`
+    : sh > 12 ? `moderate wind shear (${sh.toFixed(1)} mph over 0–80m)`
+    : sh > 6  ? `marginal wind shear (${sh.toFixed(1)} mph over 0–80m)`
+    : `weak wind shear (${sh.toFixed(1)} mph over 0–80m)`;
+
+  // Describe CIN
+  const cinAbs = Math.abs(cin);
+  const cinDesc = cinAbs < 30  ? 'minimal convective cap (storms could fire anytime)'
+    : cinAbs < 80  ? 'a loaded-gun cap (−50 to −80 J/kg — primed for explosive development)'
+    : cinAbs < 200 ? `moderate inhibition (${Math.round(cin)} J/kg — cap may break with strong forcing)`
+    : `strong inhibition (${Math.round(cin)} J/kg — storms unlikely without major forcing)`;
+
+  // Describe moisture
+  const pwatF = parseFloat(pwat)||0;
+  const moistDesc = pwatF > 40 ? `very rich deep moisture (${pwatF.toFixed(0)} kg/m²)`
+    : pwatF > 28 ? `good atmospheric moisture (${pwatF.toFixed(0)} kg/m²)`
+    : `limited moisture (${pwatF.toFixed(0)} kg/m²)`;
+
+  // NWS alert in factors?
+  const hasAlert = top.some(f=>f.n==='NWS Alert');
+  const alertLine = hasAlert ? ' An active NWS alert is contributing significantly to the elevated score.' : '';
+
+  // Compose analysis based on probability tier
+  if(pct >= 50){
+    return `Dangerous tornado parameters are stacked over Jonesboro. The atmosphere is showing ${capeDesc} combined with ${shearDesc}, creating a volatile supercell environment. ${cinDesc.charAt(0).toUpperCase()+cinDesc.slice(1)}, with ${moistDesc} feeding the instability.${alertLine} This is a high-end threat — activate your shelter plan and monitor NWS Memphis closely.`;
+  } else if(pct >= 25){
+    return `Elevated tornado risk is present for the Jonesboro area, driven primarily by ${capeDesc} and ${shearDesc}. There is ${cinDesc}, which ${cinAbs<80?'could allow explosive storm development if the cap breaks':'could limit storm initiation without strong lifting mechanisms'}. With ${moistDesc}, conditions are marginal to favorable for organized severe weather.${alertLine} Stay weather-aware and have a shelter plan ready.`;
+  } else if(pct >= 10){
+    return `A marginal tornado threat exists for Jonesboro. Current conditions show ${capeDesc} and ${shearDesc} — parameters that support occasional storm development but fall short of a robust severe weather environment. There is ${cinDesc}. ${moistDesc.charAt(0).toUpperCase()+moistDesc.slice(1)} rounds out the picture.${alertLine} Monitor NWS for any watch issuances.`;
+  } else if(pct >= 4){
+    return `Low tornado risk across NE Arkansas today. The atmosphere is characterized by ${capeDesc} and ${shearDesc}, limiting the potential for organized convection. ${cinDesc.charAt(0).toUpperCase()+cinDesc.slice(1)} further suppresses storm development. ${moistDesc.charAt(0).toUpperCase()+moistDesc.slice(1)}.${alertLine} No significant severe weather is expected under current conditions.`;
+  } else {
+    return `Negligible tornado threat for Jonesboro. Conditions are marked by ${capeDesc} and ${shearDesc}, which are insufficient to support supercell development. ${cinDesc.charAt(0).toUpperCase()+cinDesc.slice(1)}. The overall atmosphere is strongly stable and unfavorable for severe weather.${alertLine}`;
+  }
+}
+
+function typewrite(el, text, speed=12){
+  if(_aiTypewriterTimer) clearInterval(_aiTypewriterTimer);
+  let i = 0;
+  el.innerHTML = '';
+  _aiTypewriterTimer = setInterval(()=>{
+    if(i < text.length){
+      el.innerHTML = text.slice(0, i+1) + '<span style="display:inline-block;width:7px;height:.85em;background:var(--accent);vertical-align:middle;margin-left:2px;animation:blink .8s step-end infinite"></span>';
+      i++;
+    } else {
+      el.innerHTML = text;
+      clearInterval(_aiTypewriterTimer);
+    }
+  }, speed);
+}
+
+function triggerAIAnalysis(prob, params){
+  const el = $('ai-analysis-text');
+  const timeEl = $('ai-analysis-time');
+  if(!el) return;
+  const text = buildAnalysis(prob, params);
+  typewrite(el, text);
+  if(timeEl) timeEl.textContent = 'COMPUTED ' + new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) + ' · HRRR + NWS LIVE DATA';
+}
 
 // ── MCD (Mesoscale Convective Discussion) ────────────────────────────────────
+// SPC md.geojson real property names (confirmed from IEM + NOAA MapServer docs):
+//   MCDNUM or mcdnum — discussion number
+//   CONCERNING       — short "concerning" line from the discussion header
+//   WATCH_PROB       — probability of watch issuance (0–100)
+//   VALID            — valid time start (ISO or unix ms)
+//   EXPIRED          — expiration time
+//   YEAR             — year, used in the URL path
+// The SPC URL changed in ~2022 to include year: /products/md/{YEAR}/md{NNNN}.html
 async function loadMCD(){
-  const r=await fetch('https://www.spc.noaa.gov/products/md/current/md.geojson');
-  if(!r.ok)throw new Error('MCD fetch HTTP '+r.status);
-  const j=await r.json();
-  const feats=Array.isArray(j.features)?j.features:[];
+  // Try primary source first, then NOAA MapServer GeoJSON as fallback
+  const URLS=[
+    'https://www.spc.noaa.gov/products/md/current/md.geojson',
+    'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson',
+  ];
+  let feats=[];
+  for(const url of URLS){
+    try{
+      const r=await fetch(url,{cache:'no-cache'});
+      if(!r.ok) continue;
+      const j=await r.json();
+      feats=Array.isArray(j.features)?j.features:[];
+      if(feats.length>=0) break; // success (0 features is valid — no active MCDs)
+    }catch(e){
+      console.warn('MCD source failed:',url,e.message);
+    }
+  }
+  // Log raw properties of first feature to aid future debugging
+  if(feats.length>0) console.log('MCD sample props:',JSON.stringify(feats[0].properties));
   return feats.filter(f=>{
     try{return f.geometry&&pointInPolygon(LAT,LON,f.geometry);}catch{return false;}
   });
@@ -825,81 +956,50 @@ function renderMCD(mcds){
   }
   el.innerHTML=mcds.map(f=>{
     const p=f.properties||{};
-    const num    = p.MCDNUM||p.mcdnum||p.NUMBER||p.number||'—';
-    const issued = p.ISSUED||p.issued||p.VALID||p.valid||null;
-    const expires= p.EXPIRED||p.expired||p.EXPIRE||p.expire||null;
-    const concerning=p.CONCERNING||p.concerning||p.AFFECT||p.affect||p.AREAS||p.areas||'';
-    const watchProb=p.WATCH_PROB||p.watch_prob||p.WATCHPROB||null;
-    const isWatchThreat=(watchProb!=null&&parseInt(watchProb)>=40)||
-      concerning.toLowerCase().includes('tornado');
-    const issuedStr=issued?new Date(issued).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-    const expStr=expires?'Exp: '+new Date(expires).toLocaleString([],{hour:'2-digit',minute:'2-digit'}):'';
-    const url=`https://www.spc.noaa.gov/products/md/md${String(num).padStart(4,'0')}.html`;
+    // Field names: try uppercase (SPC GeoJSON) then lowercase (MapServer GeoJSON)
+    const num     = p.MCDNUM    ?? p.mcdnum    ?? p.NUMBER  ?? p.number  ?? '—';
+    const year    = p.YEAR      ?? p.year      ?? new Date().getFullYear();
+    const issued  = p.VALID     ?? p.valid     ?? p.ISSUED  ?? p.issued  ?? null;
+    const expires = p.EXPIRED   ?? p.expired   ?? p.EXPIRE  ?? p.expire  ?? null;
+    const concerning = p.CONCERNING ?? p.concerning ?? p.AFFECT ?? p.affect ?? p.AREAS ?? p.areas ?? p.SUMMARY ?? p.summary ?? '';
+    const watchProb  = p.WATCH_PROB ?? p.watch_prob ?? p.WATCHPROB ?? p.watchprob ?? null;
+    const watchProbInt = watchProb!=null ? parseInt(watchProb) : null;
+
+    const isWatchThreat = (watchProbInt!=null && watchProbInt>=40) ||
+      String(concerning).toLowerCase().includes('tornado');
+
+    // Parse time — SPC uses YYYYMMDD_HHMM format (e.g. "20250315_1845") OR ISO OR unix ms
+    function parseSPCTime(t){
+      if(!t) return null;
+      if(typeof t==='number') return new Date(t>1e10?t:t*1000);
+      const s=String(t);
+      // YYYYMMDD_HHMM
+      const m=s.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})$/);
+      if(m) return new Date(Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5]));
+      // ISO / any other string
+      const d=new Date(s);
+      return isNaN(d)?null:d;
+    }
+    const issuedDate  = parseSPCTime(issued);
+    const expiresDate = parseSPCTime(expires);
+    const issuedStr   = issuedDate  ? issuedDate.toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZoneName:'short'}) : '';
+    const expStr      = expiresDate ? 'Exp: '+expiresDate.toLocaleString([],{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}) : '';
+
+    // URL: new SPC pattern includes year subdirectory
+    const numPad = String(num).padStart(4,'0');
+    const url = `https://www.spc.noaa.gov/products/md/${year}/md${numPad}.html`;
+
     return`<div class="mcd-card${isWatchThreat?' watch-threat':''}">
       <div class="mcd-hdr">
-        <span class="mcd-num">MCD #${num}${watchProb!=null?' · Watch Prob: '+watchProb+'%':''}</span>
+        <span class="mcd-num">MCD #${num}${watchProbInt!=null?' · Watch Prob: '+watchProbInt+'%':''}</span>
         <span class="mcd-time">${issuedStr}${expStr?' · '+expStr:''}</span>
       </div>
-      ${concerning?`<div class="mcd-concern">${String(concerning).slice(0,220)}${String(concerning).length>220?'…':''}</div>`:''}
+      ${concerning?`<div class="mcd-concern">${String(concerning).slice(0,280)}${String(concerning).length>280?'…':''}</div>`:''}
       <a class="mcd-link" href="${url}" target="_blank">→ Full Discussion on SPC</a>
     </div>`;
   }).join('');
 }
 
-function renderSPC(spc){
-  const el=$('spc-content');
-  if(!spc){el.innerHTML='<span style="color:var(--dim);font-size:.75rem">SPC data unavailable</span>';return;}
-  try{
-    const cat    =Array.isArray(spc.cat)?spc.cat:[];
-    const torProb=Array.isArray(spc.torProb)?spc.torProb:[];
-    const sigTor =Array.isArray(spc.sigTor)?spc.sigTor:[];
-
-    const cp=cat[0]?.properties||{};
-    const catLabel=String(cp.LABEL||cp.label||cp.DN||cp.dn||'').toUpperCase().trim();
-    const catInfo=catLabel?CAT_INFO[catLabel]||null:null;
-
-    const tp=torProb[0]?.properties||{};
-    const torPct=String(tp.LABEL||tp.label||tp.DN||tp.dn||'').trim();
-    const hasSigTor=sigTor.length>0;
-
-    const issued=cp.VALID||cp.ISSUE||cp.valid||cp.issue||null;
-    const issuedStr=issued?'Issued: '+new Date(issued).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-
-    if(!catInfo&&!torPct){
-      el.innerHTML=`<div class="spc-none">✅ No convective outlook issued for this location today.</div>`;
-      return;
-    }
-
-    const cards=[];
-    if(catInfo){
-      cards.push(`<div class="spc-card ${catInfo.cls}">
-        <div class="spc-card-label">Categorical</div>
-        <div class="spc-card-val" style="color:${catInfo.color}">${catInfo.label}</div>
-        <div class="spc-card-sub">${catInfo.short}</div>
-      </div>`);
-    }
-    if(torPct){
-      const pNum=parseInt(torPct)||0;
-      const tColor=pNum>=15?'var(--danger)':pNum>=5?'var(--warn)':'#ffd600';
-      cards.push(`<div class="spc-card tor">
-        <div class="spc-card-label">Tornado Prob</div>
-        <div class="spc-card-val" style="color:${tColor}">${torPct}%</div>
-        <div class="spc-card-sub">Day 1 SPC Outlook</div>
-      </div>`);
-    }
-    if(hasSigTor){
-      cards.push(`<div class="spc-card tor" style="border-top-color:#b71c1c">
-        <div class="spc-card-label">Sig. Tornado</div>
-        <div class="spc-card-val" style="color:#b71c1c">⚠ YES</div>
-        <div class="spc-card-sub">10%+ hatching</div>
-      </div>`);
-    }
-    el.innerHTML=`<div class="spc-grid">${cards.join('')}</div>${issuedStr?`<div class="spc-issued">${issuedStr}</div>`:''}`;
-  }catch(err){
-    console.warn('renderSPC error:',err);
-    el.innerHTML='<span style="color:var(--dim);font-size:.75rem">SPC data parse error</span>';
-  }
-}
 
 
 function renderAlerts(alerts){
@@ -973,7 +1073,7 @@ function renderMeteo(d, nwsAlerts, spc){
   const r=risk(cape,cin,li,parseFloat(shLow));
 
   // ── Tornado probability ───────────────────────────────────────────────────
-  const prob=tornadoProb({cape,cin,li,shLow,pwat,rh,cloudLow,pp,visM:vis,nwsAlerts:nwsAlerts||[],spc:spc||null});
+  const prob=tornadoProb({cape,cin,li,shLow,pwat,rh,cloudLow,pp,visM:vis,nwsAlerts:nwsAlerts||[],spc:spc?spc[1]:null});
   const probColor=prob.pct>=40?'var(--danger)':prob.pct>=20?'var(--warn)':prob.pct>=8?'#ffd600':'var(--safe)';
   $('prob-pct').textContent=prob.pct+'%';
   $('prob-pct').style.color=probColor;
@@ -986,6 +1086,9 @@ function renderMeteo(d, nwsAlerts, spc){
     const sign=f.v>0?'+':'';
     return`<div class="pf-row"><span>${f.n}</span><span class="${cls}">${sign}${f.v}/${f.max||'—'} <span style="color:var(--border)">(${f.raw})</span></span></div>`;
   }).join('');
+
+  // Trigger AI analysis with all computed factors
+  try{ triggerAIAnalysis(prob, {cape,cin,li,shLow,pwat,rh,pp}); }catch(e){ console.warn('AI:',e); }
 
   $('risk-banner').style.borderLeftColor=r.c;
   $('risk-level').style.color=r.c; $('risk-level').textContent=r.l;
@@ -1019,7 +1122,17 @@ function renderMeteo(d, nwsAlerts, spc){
   if(!al.length)al.push({c:'',m:'No significant tornado precursors detected at this time.'});
   $('comp-alerts').innerHTML=al.map(a=>`<div class="cal ${a.c}"><div class="dot"></div>${a.m}</div>`).join('');
 
-  const labels=h.time.slice(0,24).map(t=>new Date(t+':00').getHours().toString().padStart(2,'0')+':00');
+  // Parse HRRR UTC time string (e.g. "2025-03-09T13:00") → local Date
+  // Must append 'Z' to force UTC parsing — without it, JS treats it as local time
+  function hrrrToLocal(t){ return new Date(t+':00Z'); }
+  function fmtHour(t){
+    const d=hrrrToLocal(t);
+    let h=d.getHours(), ampm=h>=12?'PM':'AM';
+    h=h%12||12;
+    return h+ampm;
+  }
+
+  const labels=h.time.slice(0,24).map(t=>fmtHour(t));
   if(chartInst)chartInst.destroy();
   chartInst=new Chart($('trend-chart'),{
     type:'line',data:{labels,datasets:[
@@ -1038,10 +1151,9 @@ function renderMeteo(d, nwsAlerts, spc){
     const c=safe(h.cape,k);
     const rk=risk(c,safe(h.convective_inhibition,k),safe(h.lifted_index,k),parseFloat(shear(safe(h.wind_speed_10m,k),safe(h.wind_direction_10m,k),safe(h.wind_speed_80m,k),safe(h.wind_direction_80m,k))));
     const icon=safe(h.precipitation_probability,k)>40?'⛈️':c>1500?'🌩️':c>500?'⛅':'🌤️';
-    const hr=new Date(h.time[k]+':00').getHours().toString().padStart(2,'0');
     const cell=document.createElement('div');
     cell.className='tc'+(k===i?' now':'');
-    cell.innerHTML=`<div class="tt">${hr}:00</div><div class="ti">${icon}</div><div class="tk">${Math.round(c)}</div><div class="tb" style="background:${rk.c}"></div>`;
+    cell.innerHTML=`<div class="tt">${fmtHour(h.time[k])}</div><div class="ti">${icon}</div><div class="tk">${Math.round(c)}</div><div class="tb" style="background:${rk.c}"></div>`;
     tl.appendChild(cell);
   }
 }
@@ -1075,7 +1187,6 @@ async function load(){
     try{renderAlerts(nws.alerts);}catch(e){console.warn('renderAlerts:',e);}
     try{renderObs(nws.obs);}catch(e){console.warn('renderObs:',e);}
     try{renderNWSForecast(nws.forecast);}catch(e){console.warn('renderNWSForecast:',e);}
-    try{renderSPC(spc);}catch(e){console.warn('renderSPC:',e);}
     try{renderMCD(mcd);}catch(e){console.warn('renderMCD:',e);}
     try{renderMeteo(md, nws.alerts, spc);}catch(e){console.warn('renderMeteo:',e);}
     try{initRadar();}catch(e){console.warn('initRadar:',e);}
