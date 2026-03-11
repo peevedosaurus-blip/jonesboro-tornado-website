@@ -273,7 +273,7 @@
 
     <!-- Manual SPC Override -->
     <div id="spc-override-panel" style="margin-bottom:16px;padding:12px 16px;border:1px solid var(--border);border-radius:4px;background:var(--panel);display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-      <div style="font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;color:var(--dim);white-space:nowrap;">⚡ SPC DAY 1 OUTLOOK</div>
+      <div style="font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;color:var(--dim);white-space:nowrap;">⚡ <a href="https://www.spc.noaa.gov/products/outlook/day1otlk.html" target="_blank" style="color:var(--dim);text-decoration:underline;text-underline-offset:3px;">SPC DAY 1 OUTLOOK</a></div>
       <div id="spc-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
       <div id="spc-override-status" style="font-family:var(--mono);font-size:.6rem;color:var(--dim);margin-left:auto;white-space:nowrap;">AUTO</div>
     </div>
@@ -675,31 +675,28 @@ function tornadoProb(params){
     spcRaw = overrideLvl.label + (_spcSigTor ? ' + SIG' : '');
     spcDataConfirmed = true;
   } else {
-    // Auto: use fetched GeoJSON
+    // Auto: use MapServer point query results
+    // The server already filtered to Jonesboro's location — no pip needed.
+    // torProb features: LABEL = "2","5","10","15","30","45","60"
+    // sigTor features:  presence = significant tornado threat
     try{
-      if(spc&&spc[1]&&spc[1].cat&&spc[1].torProb&&spc[1].sigTor){
-        const allCat=Array.isArray(spc[1].cat)?spc[1].cat:[];
-        const allTor=Array.isArray(spc[1].torProb)?spc[1].torProb:[];
-        const allSig=Array.isArray(spc[1].sigTor)?spc[1].sigTor:[];
-        if(allCat.length>0) spcDataConfirmed=true;
-        const pip=f=>{try{return f.geometry&&pointInPolygon(LAT,LON,f.geometry);}catch{return false;}};
-        const catFeats=allCat.filter(pip);
-        const torFeats=allTor.filter(pip);
-        const sigFeats=allSig.filter(pip);
-        const cp=catFeats[0]?.properties||{};
-        const catLabel=String(cp.LABEL||cp.label||cp.DN||cp.dn||'').toUpperCase().trim();
-        const tp=torFeats[0]?.properties||{};
-        const torPct=parseInt(tp.LABEL||tp.label||tp.DN||tp.dn||'0')||0;
-        const sigBonus=sigFeats.length>0?3:0;
-        const catPts={'TSTM':2,'MRGL':4,'SLGT':7,'ENH':10,'MDT':13,'HIGH':15}[catLabel]||0;
-        let torPts=0;
-        if(torPct>=30)     torPts=12;
-        else if(torPct>=15)torPts=11;
-        else if(torPct>=10)torPts=9;
-        else if(torPct>=5) torPts=6;
-        else if(torPct>=2) torPts=4;
-        spcScore=Math.min(15,Math.max(catPts,torPts)+sigBonus);
-        spcRaw=catLabel?(torPct>0?`${catLabel} / ${torPct}% tor`:catLabel):(torPct>0?`${torPct}% tor`:'—');
+      if(spc && spc[1]){
+        const torFeats = Array.isArray(spc[1].torProb) ? spc[1].torProb : [];
+        const sigFeats = Array.isArray(spc[1].sigTor)  ? spc[1].sigTor  : [];
+        if(torFeats.length > 0 || sigFeats.length > 0) spcDataConfirmed = true;
+        const tp = torFeats[0]?.attributes || torFeats[0]?.properties || {};
+        const torPct = parseInt(tp.LABEL || tp.label || tp.DN || tp.dn || '0') || 0;
+        const sigBonus = sigFeats.length > 0 ? 3 : 0;
+        let torPts = 0;
+        if(torPct>=60)      torPts=15;
+        else if(torPct>=45) torPts=14;
+        else if(torPct>=30) torPts=12;
+        else if(torPct>=15) torPts=11;
+        else if(torPct>=10) torPts=9;
+        else if(torPct>=5)  torPts=6;
+        else if(torPct>=2)  torPts=4;
+        spcScore = Math.min(15, torPts + sigBonus);
+        spcRaw = torPct > 0 ? `${torPct}% tor${sigBonus?' + SIG':''}` : (spcDataConfirmed ? 'Outside areas' : '—');
       }
     }catch(err){console.warn('SPC score error:',err);}
   }
@@ -1155,73 +1152,53 @@ async function loadNWS(){
   };
 }
 
-const SPC_DAYS={
-  1:{
-    cat:    'https://www.spc.noaa.gov/products/outlook/day1otlk_cat.nolyr.geojson',
-    tor:    'https://www.spc.noaa.gov/products/outlook/day1otlk_torn.nolyr.geojson',
-    sigtor: 'https://www.spc.noaa.gov/products/outlook/day1otlk_sigtorn.nolyr.geojson',
-  },
-  2:{
-    cat:    'https://www.spc.noaa.gov/products/outlook/day2otlk_cat.nolyr.geojson',
-    tor:    'https://www.spc.noaa.gov/products/outlook/day2otlk_torn.nolyr.geojson',
-    sigtor: 'https://www.spc.noaa.gov/products/outlook/day2otlk_sigtorn.nolyr.geojson',
-  },
-  3:{
-    cat:    'https://www.spc.noaa.gov/products/outlook/day3otlk_cat.nolyr.geojson',
-    tor:    null,
-    sigtor: 'https://www.spc.noaa.gov/products/outlook/day3otlk_sigsvr.nolyr.geojson',
-  },
-};
+// ── SPC MapServer point query ─────────────────────────────────────────────────
+// Uses NOAA's ArcGIS REST MapServer instead of spc.noaa.gov GeoJSON files.
+// The server does the spatial query — we just send lat/lon and get back
+// whatever polygon Jonesboro falls in, or an empty feature collection.
+// Layer IDs: 3=Day1 Tor Prob, 2=Day1 Sig Tor
+const SPC_MAPSERVER = 'https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer';
+const SPC_QUERY_PARAMS = `geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json`;
 
-function pointInPolygon(lat, lon, geometry){
-  const pt=[lon, lat];
-  const polys=geometry.type==='MultiPolygon'
-    ?geometry.coordinates.flatMap(mp=>mp)
-    :geometry.type==='Polygon'
-    ?geometry.coordinates:[];
-  for(const ring of polys){
-    const coords=ring[0]||ring;
-    let inside=false;
-    for(let i=0,j=coords.length-1;i<coords.length;j=i++){
-      const xi=coords[i][0],yi=coords[i][1];
-      const xj=coords[j][0],yj=coords[j][1];
-      if(((yi>pt[1])!==(yj>pt[1]))&&(pt[0]<(xj-xi)*(pt[1]-yi)/(yj-yi)+xi))inside=!inside;
-    }
-    if(inside)return true;
-  }
-  return false;
-}
-
-async function spcFetch(url){
-  if(!url) return [];
-  const r=await fetch(url);
-  if(!r.ok) throw new Error('SPC fetch HTTP '+r.status);
-  const j=await r.json();
-  return Array.isArray(j.features)?j.features:[];
+async function spcPointQuery(layerId){
+  const url = `${SPC_MAPSERVER}/${layerId}/query?geometry=${LON},${LAT}&${SPC_QUERY_PARAMS}`;
+  const r = await fetch(url);
+  if(!r.ok) throw new Error(`SPC MapServer HTTP ${r.status} (layer ${layerId})`);
+  const j = await r.json();
+  if(j.error) throw new Error(`SPC MapServer error: ${j.error.message}`);
+  return Array.isArray(j.features) ? j.features : [];
 }
 
 async function loadSPC(){
-  const results={};
-  let anyDataReceived=false;
-  for(const day of [1,2,3]){
-    const urls=SPC_DAYS[day];
-    const [catD,torD,sigD]=await Promise.allSettled([
-      spcFetch(urls.cat),
-      spcFetch(urls.tor),
-      spcFetch(urls.sigtor),
-    ]);
-    const cat    =catD.status==='fulfilled'?catD.value:[];
-    const torProb=torD.status==='fulfilled'?torD.value:[];
-    const sigTor =sigD.status==='fulfilled'?sigD.value:[];
-    // Only mark data received if at least one layer has real polygons.
-    // Empty arrays = outlook not yet posted or stale data — not "confirmed clear".
-    if(cat.length>0||torProb.length>0||sigTor.length>0) anyDataReceived=true;
-    results[day]={cat,torProb,sigTor};
+  // Query Day 1 tornado probability (layer 3) and significant tornado (layer 2)
+  const [torResult, sigResult] = await Promise.allSettled([
+    spcPointQuery(3),
+    spcPointQuery(2),
+  ]);
+
+  const torFeatures = torResult.status === 'fulfilled' ? torResult.value : [];
+  const sigFeatures = sigResult.status === 'fulfilled' ? sigResult.value : [];
+
+  console.log('SPC MapServer tor:', torFeatures, 'sig:', sigFeatures);
+
+  // No data at all — return null so tornadoProb() skips the penalty
+  if(torFeatures.length === 0 && sigFeatures.length === 0){
+    if(torResult.status === 'rejected') console.warn('SPC tor query failed:', torResult.reason);
+    if(sigResult.status === 'rejected') console.warn('SPC sig query failed:', sigResult.reason);
+    return null;
   }
-  // Return null if no polygon data at all — tornadoProb() treats null as
-  // "unknown" and skips the SPC clear penalty instead of penalizing on missing data.
-  if(!anyDataReceived) return null;
-  return results;
+
+  // Wrap in the same structure tornadoProb() expects for Day 1
+  // torProb features have a LABEL field like "2", "5", "10", "15", "30", "45", "60"
+  // sigTor features just need to exist (presence = sig threat)
+  return {
+    1: {
+      torProb: torFeatures,
+      sigTor:  sigFeatures,
+      // cat not used for scoring anymore (tornado layer only), pass empty
+      cat: torFeatures.length > 0 ? torFeatures : [],
+    }
+  };
 }
 
 let _aiTypewriterTimer=null;
