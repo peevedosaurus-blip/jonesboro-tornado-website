@@ -174,20 +174,26 @@
   #debug-body{display:none;padding:14px 16px;}
   #debug-body.open{display:block;}
   .dbg-section{margin-bottom:14px;}
-  .dbg-title{font-family:var(--mono);font-size:.58rem;color:#ffd600;letter-spacing:.2em;margin-bottom:8px;}
-  .dbg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;}
-  .dbg-row{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;background:var(--bg2);border-radius:3px;font-family:var(--mono);font-size:.67rem;border-left:3px solid var(--border);}
-  .dbg-row.pos{border-left-color:var(--warn);}
-  .dbg-row.neg{border-left-color:#7986cb;}
-  .dbg-row.zero{border-left-color:var(--border);opacity:.5;}
-  .dbg-name{color:var(--dim);}
-  .dbg-val{color:var(--text);}
-  .dbg-pts{font-size:.75rem;font-weight:bold;}
-  .dbg-pts.pos{color:var(--warn);}
-  .dbg-pts.neg{color:#7986cb;}
-  .dbg-math{font-family:var(--mono);font-size:.62rem;color:var(--dim);margin-top:10px;padding:8px 10px;background:var(--bg2);border-radius:3px;line-height:2;}
+  .dbg-title{font-family:var(--mono);font-size:.58rem;color:#ffd600;letter-spacing:.2em;margin-bottom:10px;}
+  /* Factor cards: responsive grid, each card fully self-contained */
+  .dbg-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:8px;}
+  .dbg-card{background:var(--bg2);border:1px solid var(--border);border-top:3px solid var(--border);border-radius:3px;padding:10px 12px;}
+  .dbg-card.pos{border-top-color:var(--warn);}
+  .dbg-card.neg{border-top-color:#7986cb;}
+  .dbg-card.zero{opacity:.5;}
+  .dbg-card-name{font-family:var(--mono);font-size:.6rem;color:var(--dim);letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px;}
+  .dbg-card-score{font-family:var(--cond);font-weight:900;font-size:1.5rem;line-height:1;margin-bottom:4px;}
+  .dbg-card-score.pos{color:var(--warn);}
+  .dbg-card-score.neg{color:#7986cb;}
+  .dbg-card-score.zero{color:var(--dim);}
+  .dbg-card-max{font-family:var(--mono);font-size:.6rem;color:var(--dim);}
+  .dbg-card-raw{font-family:var(--mono);font-size:.62rem;color:var(--text);margin-top:5px;padding-top:5px;border-top:1px solid var(--border);}
+  .dbg-bar-wrap{height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden;}
+  .dbg-bar-fill{height:100%;border-radius:2px;}
+  .dbg-math{font-family:var(--mono);font-size:.65rem;color:var(--dim);margin-top:12px;padding:10px 12px;background:var(--bg2);border-radius:3px;line-height:2.2;border-left:3px solid var(--accent);}
   .dbg-math span{color:var(--accent);}
-  .dbg-note{font-family:var(--mono);font-size:.58rem;color:var(--dim);margin-top:8px;line-height:1.7;padding:6px 10px;border-left:2px solid #ffd600;background:rgba(255,214,0,.04);}
+  .dbg-math .dm-label{color:var(--dim);font-size:.58rem;text-transform:uppercase;letter-spacing:.1em;}
+  .dbg-note{font-family:var(--mono);font-size:.6rem;color:var(--dim);margin-top:8px;line-height:1.8;padding:8px 12px;border-left:2px solid #ffd600;background:rgba(255,214,0,.04);}
 
   /* AI analysis */
   #spc-ai-content{border-top:1px solid var(--border);padding-top:10px;}
@@ -263,6 +269,13 @@
         <div id="prob-factors"></div>
       </div>
       <div id="risk-nums"></div>
+    </div>
+
+    <!-- Manual SPC Override -->
+    <div id="spc-override-panel" style="margin-bottom:16px;padding:12px 16px;border:1px solid var(--border);border-radius:4px;background:var(--panel);display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+      <div style="font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;color:var(--dim);white-space:nowrap;">⚡ SPC DAY 1 OUTLOOK</div>
+      <div id="spc-btns" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+      <div id="spc-override-status" style="font-family:var(--mono);font-size:.6rem;color:var(--dim);margin-left:auto;white-space:nowrap;">AUTO</div>
     </div>
 
     <!-- Probability Key -->
@@ -636,45 +649,65 @@ function tornadoProb(params){
   total+=lrScore;
 
   // ── 10. Lifted Index (0–6 pts) ───────────────────────────────────────────
+  // LI is an instability parameter, not rotation-dependent — same as lapse rate.
+  // 50% free + 50% gated: a strongly negative LI still indicates real instability
+  // even when SRH is low. Full gating was causing it to zero out on genuinely
+  // unstable days with weak helicity.
   const liVal=li||0;
   const liRaw=liVal<=-8?6:liVal<=-6?5:liVal<=-4?3:liVal<=-2?1:0;
-  const liScore=Math.round(liRaw*mult);
+  const liScore=Math.round(liRaw*0.5 + liRaw*0.5*mult);
   factors.push({n:'Lifted Index',v:liScore,max:6,raw:`${liVal.toFixed(1)}`});
   total+=liScore;
 
-  // ── 11. SPC Convective Outlook (0–20 pts) ────────────────────────────────
-  // FIX: Widened MDT/HIGH gap. Previous ENH=10, MDT=11 was too narrow —
-  // a real MDT day has vastly higher probability than ENH. New scale:
-  // ENH=10, MDT=13, HIGH=15. Cap raised from 12 to 15.
+  // ── 11. SPC Convective Outlook (0–15 pts) ────────────────────────────────
+  // Three possible inputs, checked in order:
+  //   a) Manual override (_spcOverride 0–5) → use directly, always confirmed
+  //   b) Auto GeoJSON fetch with real polygons → point-in-polygon scoring
+  //   c) No data / empty polygons → unknown, skip penalty
   let spcScore=0, spcRaw='—';
-  try{
-    if(spc&&spc.cat&&spc.torProb&&spc.sigTor){
-      const allCat=Array.isArray(spc.cat)?spc.cat:[];
-      const allTor=Array.isArray(spc.torProb)?spc.torProb:[];
-      const allSig=Array.isArray(spc.sigTor)?spc.sigTor:[];
-      const pip=f=>{try{return f.geometry&&pointInPolygon(LAT,LON,f.geometry);}catch{return false;}};
-      const catFeats=allCat.filter(pip);
-      const torFeats=allTor.filter(pip);
-      const sigFeats=allSig.filter(pip);
-      const cp=catFeats[0]?.properties||{};
-      const catLabel=String(cp.LABEL||cp.label||cp.DN||cp.dn||'').toUpperCase().trim();
-      const tp=torFeats[0]?.properties||{};
-      const torPct=parseInt(tp.LABEL||tp.label||tp.DN||tp.dn||'0')||0;
-      const sigBonus=sigFeats.length>0?3:0;
-      // FIX: MDT and HIGH now have meaningfully higher scores
-      const catPts={'TSTM':2,'MRGL':4,'SLGT':7,'ENH':10,'MDT':13,'HIGH':15}[catLabel]||0;
-      let torPts=0;
-      if(torPct>=30)     torPts=12;
-      else if(torPct>=15)torPts=11;
-      else if(torPct>=10)torPts=9;
-      else if(torPct>=5) torPts=6;
-      else if(torPct>=2) torPts=4;
-      // FIX: Raised cap from 12 to 15 to match widened categorical scale
-      spcScore=Math.min(15,Math.max(catPts,torPts)+sigBonus);
-      spcRaw=catLabel?(torPct>0?`${catLabel} / ${torPct}% tor`:catLabel):(torPct>0?`${torPct}% tor`:'—');
-    }
-  }catch(err){console.warn('SPC score error:',err);}
-  factors.push({n:'SPC Outlook',v:spcScore,max:15,raw:spcRaw});
+  let spcDataConfirmed=false;
+
+  if(_spcOverride >= 0){
+    // Manual override: use tornado % threshold pts + optional sig tor bonus
+    const overrideLvl = SPC_LEVELS[_spcOverride];
+    const sigBonus = _spcSigTor ? 3 : 0;
+    spcScore = Math.min(15, overrideLvl.pts + sigBonus);
+    spcRaw = overrideLvl.label + (_spcSigTor ? ' + SIG' : '');
+    spcDataConfirmed = true;
+  } else {
+    // Auto: use fetched GeoJSON
+    try{
+      if(spc&&spc[1]&&spc[1].cat&&spc[1].torProb&&spc[1].sigTor){
+        const allCat=Array.isArray(spc[1].cat)?spc[1].cat:[];
+        const allTor=Array.isArray(spc[1].torProb)?spc[1].torProb:[];
+        const allSig=Array.isArray(spc[1].sigTor)?spc[1].sigTor:[];
+        if(allCat.length>0) spcDataConfirmed=true;
+        const pip=f=>{try{return f.geometry&&pointInPolygon(LAT,LON,f.geometry);}catch{return false;}};
+        const catFeats=allCat.filter(pip);
+        const torFeats=allTor.filter(pip);
+        const sigFeats=allSig.filter(pip);
+        const cp=catFeats[0]?.properties||{};
+        const catLabel=String(cp.LABEL||cp.label||cp.DN||cp.dn||'').toUpperCase().trim();
+        const tp=torFeats[0]?.properties||{};
+        const torPct=parseInt(tp.LABEL||tp.label||tp.DN||tp.dn||'0')||0;
+        const sigBonus=sigFeats.length>0?3:0;
+        const catPts={'TSTM':2,'MRGL':4,'SLGT':7,'ENH':10,'MDT':13,'HIGH':15}[catLabel]||0;
+        let torPts=0;
+        if(torPct>=30)     torPts=12;
+        else if(torPct>=15)torPts=11;
+        else if(torPct>=10)torPts=9;
+        else if(torPct>=5) torPts=6;
+        else if(torPct>=2) torPts=4;
+        spcScore=Math.min(15,Math.max(catPts,torPts)+sigBonus);
+        spcRaw=catLabel?(torPct>0?`${catLabel} / ${torPct}% tor`:catLabel):(torPct>0?`${torPct}% tor`:'—');
+      }
+    }catch(err){console.warn('SPC score error:',err);}
+  }
+
+  const spcDisplayRaw = _spcOverride>=0
+    ? `MANUAL · ${SPC_LEVELS[_spcOverride].label}`
+    : (spcDataConfirmed ? (spcRaw==='—'?'Outside all areas':spcRaw) : 'No data / not yet issued');
+  factors.push({n:'SPC Outlook',v:spcScore,max:15,raw:spcDisplayRaw});
   total+=spcScore;
 
   // ── 12. NWS Active Alert (0–15 pts for scoring; TOR WARNING = hard clamp) ──
@@ -698,20 +731,20 @@ function tornadoProb(params){
   total+=nwsScore;
 
   // ── SPC-absent penalty ─────────────────────────────────────────────────────
-  if(spc!==null && spcScore===0){
+  // Only fires when Day 1 outlook polygons were confirmed loaded AND location
+  // is outside all risk areas. Missing/stale/not-yet-posted data = no penalty.
+  const spcClearPenalty = spcDataConfirmed && spcScore===0;
+  if(spcClearPenalty){
     total=Math.max(0,total-8);
-    factors.push({n:'SPC Clear',v:-8,max:0,raw:'No outlook'});
+    factors.push({n:'SPC Clear',v:-8,max:0,raw:'Outside all areas'});
   }
 
   // ── Final mapping ──────────────────────────────────────────────────────────
   const maxRaw=130;
   const raw=Math.max(0,Math.min(maxRaw,total));
 
-  // FIX: Tornado Warning → hard clamp to 85–95% (CAPE-boosted within range)
-  // This ensures active confirmed tornadoes show near-maximum probability
-  // regardless of what the ingredient score says.
   if(torWarningActive){
-    const clampPct = cape > 2000 ? 95 : cape > 1000 ? 92 : 88;
+    const clampPct=cape>2000?95:cape>1000?92:88;
     const envTotal2=Math.max(0,Math.min(maxRaw,raw-(15)-(nwsScore>=12?nwsScore:0)));
     const envPct2=Math.min(99,Math.round(Math.pow(envTotal2/maxRaw,1.65)*100));
     return{pct:clampPct, envPct:envPct2, factors, total:raw, torWarningClamp:true};
@@ -719,9 +752,8 @@ function tornadoProb(params){
 
   const pct=Math.min(99,Math.round(Math.pow(raw/maxRaw,1.65)*100));
 
-  // envPct = score from atmospheric ingredients only (no SPC/NWS adjustments)
-  const envAdj=(spcScore||0)+(nwsScore||0)-(spc!==null&&spcScore===0?-8:0);
-  const envTotal=Math.max(0,Math.min(maxRaw,raw-spcScore-nwsScore+(spc!==null&&spcScore===0?8:0)));
+  // envPct = atmospheric ingredients only, no SPC/NWS anchors
+  const envTotal=Math.max(0,Math.min(maxRaw,raw-spcScore-nwsScore+(spcClearPenalty?8:0)));
   const envPct=Math.min(99,Math.round(Math.pow(envTotal/maxRaw,1.65)*100));
 
   return{pct, envPct, factors, total:raw, torWarningClamp:false};
@@ -730,6 +762,106 @@ function tornadoProb(params){
 // ── Debug panel ───────────────────────────────────────────────────────────────
 let _lastProbResult = null;
 let _lastProbParams = null;
+let _lastNwsAlerts = [];
+let _lastSpcData = null;
+let _lastMeteoData = null;
+
+// ── SPC Manual Override ───────────────────────────────────────────────────────
+// -1 = AUTO (use fetched GeoJSON), 0–5 = manual level matching SPC scale
+let _spcOverride = -1;
+
+// Tornado probability thresholds matching SPC Day 1 Tornado layer legend.
+// pts maps each threshold to scoring points using the same scale as the auto GeoJSON tor layer.
+// sig:true = hatching on SPC map = significant tornado threat (adds sigBonus in auto mode,
+//            shown as a separate checkbox override here).
+const SPC_LEVELS = [
+  { label:'0%',   color:'#4a7a90',  border:'rgba(74,122,144,.4)',   pts:0  },
+  { label:'2%',   color:'#66bb6a',  border:'rgba(102,187,106,.5)',  pts:4  },
+  { label:'5%',   color:'#ffee58',  border:'rgba(255,238,88,.5)',   pts:6  },
+  { label:'10%',  color:'#ffa726',  border:'rgba(255,167,38,.5)',   pts:9  },
+  { label:'15%',  color:'#ef5350',  border:'rgba(239,83,80,.5)',    pts:11 },
+  { label:'30%',  color:'#b71c1c',  border:'rgba(183,28,28,.5)',    pts:12 },
+  { label:'45%',  color:'#ef9a9a',  border:'rgba(255,100,100,.5)',  pts:14 },
+  { label:'60%',  color:'#ff80ab',  border:'rgba(255,128,171,.5)',  pts:15 },
+];
+// Significant tornado (hatching) adds +3 pts, capped at 15 total
+let _spcSigTor = false;
+
+function renderSPCButtons(){
+  const container = $('spc-btns');
+  if(!container) return;
+
+  // AUTO button
+  const autoActive = _spcOverride === -1;
+  let html = `<button onclick="setSPCOverride(-1)" style="
+    background:${autoActive?'rgba(0,212,255,.12)':'var(--bg2)'};
+    border:1px solid ${autoActive?'var(--accent)':'var(--border)'};
+    border-radius:3px;padding:5px 12px;font-family:var(--mono);font-size:.65rem;
+    color:${autoActive?'var(--accent)':'var(--dim)'};cursor:pointer;letter-spacing:.06em;
+    transition:all .15s;">AUTO</button>`;
+
+  // Tornado % threshold buttons
+  SPC_LEVELS.forEach((lvl, idx) => {
+    const active = _spcOverride === idx;
+    // Parse rgb from border string for active background
+    const rgbMatch = lvl.border.match(/rgba\(([^,]+,[^,]+,[^,]+)/);
+    const rgb = rgbMatch ? rgbMatch[1] : '74,122,144';
+    html += `<button onclick="setSPCOverride(${idx})" style="
+      background:${active?`rgba(${rgb},.2)`:'var(--bg2)'};
+      border:1px solid ${active?lvl.color:lvl.border};
+      border-radius:3px;padding:5px 12px;font-family:var(--mono);font-size:.65rem;
+      color:${lvl.color};cursor:pointer;letter-spacing:.06em;
+      transition:all .15s;">${lvl.label}</button>`;
+  });
+
+  // Significant tornado (hatching) toggle — only shown when a threshold is selected
+  if(_spcOverride >= 0){
+    html += `<button onclick="toggleSigTor()" style="
+      background:${_spcSigTor?'rgba(255,23,68,.18)':'var(--bg2)'};
+      border:1px solid ${_spcSigTor?'var(--danger)':'rgba(255,23,68,.3)'};
+      border-radius:3px;padding:5px 12px;font-family:var(--mono);font-size:.65rem;
+      color:${_spcSigTor?'var(--danger)':'rgba(255,23,68,.5)'};cursor:pointer;letter-spacing:.06em;
+      transition:all .15s;" title="Significant tornado threat (hatching on SPC map)">SIG ///</button>`;
+  }
+
+  container.innerHTML = html;
+
+  // Status text
+  const statusEl = $('spc-override-status');
+  if(statusEl){
+    if(_spcOverride === -1){
+      statusEl.textContent = 'AUTO · using fetched GeoJSON';
+      statusEl.style.color = 'var(--dim)';
+    } else {
+      const lvl = SPC_LEVELS[_spcOverride];
+      statusEl.textContent = `MANUAL · ${lvl.label} tor${_spcSigTor?' + SIG':''}`;
+      statusEl.style.color = _spcSigTor ? 'var(--danger)' : lvl.color;
+    }
+  }
+}
+
+function toggleSigTor(){
+  _spcSigTor = !_spcSigTor;
+  renderSPCButtons();
+  if(_lastMeteoData){
+    try{ renderMeteo(_lastMeteoData, _lastNwsAlerts, _lastSpcData); } catch(e){ console.warn('re-render:',e); }
+    if($('debug-body').classList.contains('open') && _lastProbResult){
+      renderDebugPanel(_lastProbResult, _lastProbParams);
+    }
+  }
+}
+
+function setSPCOverride(level){
+  _spcOverride = level;
+  renderSPCButtons();
+  if(_lastMeteoData){
+    try{ renderMeteo(_lastMeteoData, _lastNwsAlerts, _lastSpcData); } catch(e){ console.warn('re-render:',e); }
+    // If debug panel is already open, refresh it with the new scores
+    if($('debug-body').classList.contains('open') && _lastProbResult){
+      renderDebugPanel(_lastProbResult, _lastProbParams);
+    }
+  }
+}
 
 function toggleDebug(){
   const btn = $('debug-toggle');
@@ -743,49 +875,53 @@ function toggleDebug(){
 function renderDebugPanel(prob, params){
   const el = $('debug-content');
   if(!el) return;
-  const {cape, cin, srh, sh06km, dp2m, lclHeight, lapseRate, pwat} = params;
+  const {srh} = params;
   const mult = srhMult(srh||0);
+  const maxRaw = 130;
 
-  // Factor bars
-  const factorRows = prob.factors.map(f => {
+  // One card per factor
+  const cards = prob.factors.map(f => {
     const cls = f.v > 0 ? 'pos' : f.v < 0 ? 'neg' : 'zero';
-    const barW = f.max > 0 ? Math.abs(f.v)/f.max*100 : 0;
+    const barW = f.max > 0 ? Math.round(Math.abs(f.v) / f.max * 100) : 0;
     const barColor = f.v > 0 ? 'var(--warn)' : f.v < 0 ? '#7986cb' : 'var(--border)';
-    return `<div class="dbg-row ${cls}">
-      <span class="dbg-name">${f.n}</span>
-      <span style="flex:1;margin:0 8px;position:relative;height:6px;background:var(--border);border-radius:3px;display:inline-block;vertical-align:middle;min-width:50px">
-        <span style="position:absolute;left:0;top:0;height:100%;width:${barW}%;background:${barColor};border-radius:3px"></span>
-      </span>
-      <span class="dbg-pts ${cls}">${f.v>0?'+':''}${f.v}/${f.max||'—'}</span>
-      <span class="dbg-val" style="margin-left:8px;color:var(--dim);min-width:90px;text-align:right">${f.raw}</span>
+    const sign = f.v > 0 ? '+' : '';
+    const maxLabel = f.max > 0 ? `/ ${f.max} max` : '';
+    return `<div class="dbg-card ${cls}">
+      <div class="dbg-card-name">${f.n}</div>
+      <div class="dbg-card-score ${cls}">${sign}${f.v}</div>
+      <div class="dbg-card-max">${maxLabel}</div>
+      <div class="dbg-bar-wrap"><div class="dbg-bar-fill" style="width:${barW}%;background:${barColor}"></div></div>
+      <div class="dbg-card-raw">${f.raw}</div>
     </div>`;
   }).join('');
 
-  // Math breakdown
-  const maxRaw = 130;
   const clampNote = prob.torWarningClamp
-    ? `<div style="color:var(--danger);font-family:var(--mono);font-size:.68rem;margin-top:6px;">⚠ TORNADO WARNING ACTIVE — output clamped to ${prob.pct}% (overrides scoring)</div>`
+    ? `<div style="color:var(--danger);font-family:var(--mono);font-size:.68rem;margin-top:8px;padding:6px 10px;background:rgba(255,23,68,.08);border-radius:3px;border-left:3px solid var(--danger);">⚠ TORNADO WARNING ACTIVE — probability clamped to ${prob.pct}% · scoring overridden</div>`
     : '';
 
   el.innerHTML = `
     <div class="dbg-section">
       <div class="dbg-title">FACTOR SCORES</div>
-      <div class="dbg-grid">${factorRows}</div>
+      <div class="dbg-cards">${cards}</div>
       <div class="dbg-math">
-        Raw total: <span>${prob.total}</span> / ${maxRaw} &nbsp;|&nbsp;
-        SRH mult: <span>${mult.toFixed(2)}</span> &nbsp;|&nbsp;
-        Curve: <span>(${prob.total}/${maxRaw})^1.65 × 100</span> &nbsp;|&nbsp;
-        ENV score: <span>${prob.envPct}%</span> &nbsp;|&nbsp;
-        Final: <span>${prob.pct}%</span>
+        <span class="dm-label">Raw total</span> &nbsp;<span>${prob.total} / ${maxRaw}</span>
+        &nbsp;&nbsp;·&nbsp;&nbsp;
+        <span class="dm-label">SRH mult</span> &nbsp;<span>${mult.toFixed(2)}</span>
+        &nbsp;&nbsp;·&nbsp;&nbsp;
+        <span class="dm-label">Curve</span> &nbsp;<span>(${prob.total}/${maxRaw})^1.65 × 100</span>
+        &nbsp;&nbsp;·&nbsp;&nbsp;
+        <span class="dm-label">ENV only</span> &nbsp;<span>${prob.envPct}%</span>
+        &nbsp;&nbsp;·&nbsp;&nbsp;
+        <span class="dm-label">Final</span> &nbsp;<span>${prob.pct}%</span>
         ${clampNote}
       </div>
       <div class="dbg-note">
-        <strong style="color:#ffd600">How to read this:</strong> Each factor contributes pts toward a raw total (max ${maxRaw}).
-        The raw total is mapped through a power curve (x^1.65) to compress extreme values
-        and expand the mid-range. SRH mult (${mult.toFixed(2)}) gates rotation-dependent factors —
-        when helicity is low, CAPE/moisture factors score less because rotation is the key
-        discriminator between pulse storms and tornadic supercells.
-        ENV score (${prob.envPct}%) shows what the atmosphere alone would produce without SPC/NWS anchors.
+        <strong style="color:#ffd600">How to read this:</strong>
+        Each card is one scoring factor. The score (e.g. +9/15) shows points earned out of the maximum possible.
+        All points are summed into a raw total, then mapped through a power curve (x^1.65) to get the final %.
+        <strong style="color:var(--text)">SRH mult (${mult.toFixed(2)})</strong> gates rotation-dependent factors — high CAPE without helicity
+        means pulse storms, not supercells, so those factors score less until rotation is confirmed.
+        <strong style="color:var(--text)">ENV score (${prob.envPct}%)</strong> shows what the atmosphere alone produces, before SPC/NWS anchors are applied.
       </div>
     </div>`;
 }
@@ -1066,6 +1202,7 @@ async function spcFetch(url){
 
 async function loadSPC(){
   const results={};
+  let anyDataReceived=false;
   for(const day of [1,2,3]){
     const urls=SPC_DAYS[day];
     const [catD,torD,sigD]=await Promise.allSettled([
@@ -1073,12 +1210,17 @@ async function loadSPC(){
       spcFetch(urls.tor),
       spcFetch(urls.sigtor),
     ]);
-    results[day]={
-      cat:    catD.status==='fulfilled'?catD.value:[],
-      torProb:torD.status==='fulfilled'?torD.value:[],
-      sigTor: sigD.status==='fulfilled'?sigD.value:[],
-    };
+    const cat    =catD.status==='fulfilled'?catD.value:[];
+    const torProb=torD.status==='fulfilled'?torD.value:[];
+    const sigTor =sigD.status==='fulfilled'?sigD.value:[];
+    // Only mark data received if at least one layer has real polygons.
+    // Empty arrays = outlook not yet posted or stale data — not "confirmed clear".
+    if(cat.length>0||torProb.length>0||sigTor.length>0) anyDataReceived=true;
+    results[day]={cat,torProb,sigTor};
   }
+  // Return null if no polygon data at all — tornadoProb() treats null as
+  // "unknown" and skips the SPC clear penalty instead of penalizing on missing data.
+  if(!anyDataReceived) return null;
   return results;
 }
 
@@ -1448,8 +1590,13 @@ async function load(){
     const spc=spcResult.status==='fulfilled'?spcResult.value:null;
     const mcd=mcdResult.status==='fulfilled'?mcdResult.value:[];
 
+    _lastMeteoData=md;
+    _lastNwsAlerts=nws.alerts||[];
+    _lastSpcData=spc;
+
     $('loading').style.display='none';
     $('dashboard').style.display='block';
+    renderSPCButtons();
     $('updated').textContent='UPDATED '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 
     try{renderAlerts(nws.alerts);}catch(e){console.warn('renderAlerts:',e);}
