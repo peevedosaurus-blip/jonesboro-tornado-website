@@ -445,6 +445,19 @@ const METEO=`https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${
 const $=id=>document.getElementById(id);
 const safe=(arr,i,def=0)=>(arr&&arr[i]!=null?arr[i]:def);
 const wd=d=>['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'][Math.round(d/22.5)%16];
+function escHtml(value){
+  return String(value ?? '')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+function safeUrl(url){
+  const s=String(url ?? '');
+  if(/^https?:\/\//i.test(s)) return s;
+  return '#';
+}
 function shear(s1,d1,s2,d2){const r=x=>x*Math.PI/180;return parseFloat(Math.sqrt((-s2*Math.sin(r(d2))+s1*Math.sin(r(d1)))**2+(-s2*Math.cos(r(d2))+s1*Math.cos(r(d1)))**2).toFixed(1));}
 function nowIdx(t){const h=new Date().toISOString().slice(0,13);const i=t.findIndex(x=>x.startsWith(h));return i>=0?i:0;}
 function row(n,v,c){return`<div class="row"><span class="rn">${n}</span><span class="rv" style="color:${c||'var(--text)'}">  ${v}</span></div>`;}
@@ -1298,10 +1311,11 @@ function renderMCD(mcds){
     const expStr=expiresDate?'Exp: '+expiresDate.toLocaleString([],{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}):'';
     const numPad=String(num).padStart(4,'0');
     const url=`https://www.spc.noaa.gov/products/md/${year}/md${numPad}.html`;
+    const safeConcern=escHtml(String(concerning).slice(0,280));
     return`<div class="mcd-card${isWatchThreat?' watch-threat':''}">
-      <div class="mcd-hdr"><span class="mcd-num">MCD #${num}${watchProbInt!=null?' · Watch Prob: '+watchProbInt+'%':''}</span><span class="mcd-time">${issuedStr}${expStr?' · '+expStr:''}</span></div>
-      ${concerning?`<div class="mcd-concern">${String(concerning).slice(0,280)}${String(concerning).length>280?'…':''}</div>`:''}
-      <a class="mcd-link" href="${url}" target="_blank">→ Full Discussion on SPC</a>
+      <div class="mcd-hdr"><span class="mcd-num">MCD #${escHtml(num)}${watchProbInt!=null?' · Watch Prob: '+watchProbInt+'%':''}</span><span class="mcd-time">${escHtml(issuedStr)}${expStr?' · '+escHtml(expStr):''}</span></div>
+      ${concerning?`<div class="mcd-concern">${safeConcern}${String(concerning).length>280?'…':''}</div>`:''}
+      <a class="mcd-link" href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">→ Full Discussion on SPC</a>
     </div>`;
   }).join('');
 }
@@ -1312,8 +1326,8 @@ function renderAlerts(alerts){
   w.innerHTML=alerts.map(f=>{
     const p=f.properties,cls=alertCls(p.event),icon=alertIcon(p.event);
     const exp=p.expires?new Date(p.expires).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
-    const hl=(p.headline||p.description||'').replace(/\*/g,'').trim().slice(0,150);
-    return`<div class="nws-alert ${cls}"><div class="ai">${icon}</div><div class="ab"><div class="ae ${cls}">${p.event}</div><div class="am">${p.senderName||'NWS'} · Expires ${exp} · ${p.severity||''} / ${p.urgency||''}</div>${hl?`<div class="ad">${hl}</div>`:''}</div></div>`;
+    const hl=escHtml((p.headline||p.description||'').replace(/\*/g,'').trim().slice(0,150));
+    return`<div class="nws-alert ${cls}"><div class="ai">${icon}</div><div class="ab"><div class="ae ${cls}">${escHtml(p.event)}</div><div class="am">${escHtml(p.senderName||'NWS')} · Expires ${escHtml(exp)} · ${escHtml(p.severity||'')} / ${escHtml(p.urgency||'')}</div>${hl?`<div class="ad">${hl}</div>`:''}</div></div>`;
   }).join('');
 }
 
@@ -1336,7 +1350,7 @@ function renderObs(obs){
   ];
   $('obs-strip').innerHTML=
     `<div style="width:100%;font-family:var(--mono);font-size:.58rem;color:var(--dim);letter-spacing:.1em;padding:2px 0 6px">📡 KJBR LIVE SURFACE OBSERVATION</div>`
-    +chips.map(([l,v])=>`<div class="obs-chip"><div class="obs-chip-lbl">${l}</div><div class="obs-chip-val">${v}</div></div>`).join('');
+    +chips.map(([l,v])=>`<div class="obs-chip"><div class="obs-chip-lbl">${escHtml(l)}</div><div class="obs-chip-val">${escHtml(v)}</div></div>`).join('');
 }
 
 function renderNWSForecast(periods){
@@ -1344,7 +1358,7 @@ function renderNWSForecast(periods){
   $('nws-periods').innerHTML=periods.slice(0,14).map(p=>{
     const pop=p.probabilityOfPrecipitation?.value;
     const tempColor=p.isDaytime?'var(--accent)':'#7986cb';
-    return`<div class="np"><div class="np-name">${p.name.slice(0,10)}</div><div class="np-icon">${wxIcon(p.shortForecast)}</div><div class="np-temp" style="color:${tempColor}">${p.temperature??'—'}°${p.temperatureUnit||'F'}</div>${pop!=null?`<div class="np-pop">💧${pop}%</div>`:''}<div class="np-wind">${(p.windSpeed||'').replace(' to ','-')} ${p.windDirection||''}</div></div>`;
+    return`<div class="np"><div class="np-name">${escHtml((p.name||'').slice(0,10))}</div><div class="np-icon">${wxIcon(p.shortForecast)}</div><div class="np-temp" style="color:${tempColor}">${escHtml(p.temperature??'—')}°${escHtml(p.temperatureUnit||'F')}</div>${pop!=null?`<div class="np-pop">💧${escHtml(pop)}%</div>`:''}<div class="np-wind">${escHtml((p.windSpeed||'').replace(' to ','-'))} ${escHtml(p.windDirection||'')}</div></div>`;
   }).join('');
 }
 
