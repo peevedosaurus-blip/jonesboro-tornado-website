@@ -280,6 +280,7 @@
     #hodo-canvas{width:100%!important;height:auto!important;aspect-ratio:1/1;}
     #hodo-rows{grid-template-columns:1fr 1fr;}
     .hodo-idx{grid-template-columns:1fr 1fr;}
+    #hodo-wrap>div:last-child{border-left:none;border-top:1px solid var(--border);padding-left:0;padding-top:14px;margin-top:4px;}
     .hi-val{font-size:1.1rem;}
 
     /* Chart */
@@ -468,8 +469,8 @@
         <div class="pt">Hodograph</div>
         <canvas id="hodo-canvas" width="340" height="340" style="display:block;max-width:100%;"></canvas>
       </div>
-      <div class="panel" style="background:transparent;border:none;padding:0;">
-        <div class="pt">Wind Profile</div>
+      <div style="min-width:0;border-left:1px solid var(--border);padding-left:14px;">
+        <div class="pt" style="color:var(--accent);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border);">Wind Profile</div>
         <div id="hodo-stats">
           <div class="hodo-idx" id="stp-grid"></div>
           <div id="hodo-rows"></div>
@@ -499,6 +500,7 @@
 <script>
 const LAT=35.8423, LON=-90.7043, STATION='KJBR';
 const UA='VortexDashboard/1.0 (jonesboro-ar-tornado-forecast)';
+
 
 const METEO=`https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}`
   +`&hourly=temperature_2m,relative_humidity_2m,dew_point_2m,surface_pressure,`
@@ -690,19 +692,40 @@ function tornadoProb(params){
 
   if(_spcOverride >= 0){
     const overrideLvl = SPC_LEVELS[_spcOverride];
-    const sigBonus = _spcSigTor ? 3 : 0;
+    const sigBonus = _spcSigTor==='CIG3'?5:_spcSigTor==='CIG2'?4:_spcSigTor==='CIG1'?3:0;
     spcScore = Math.min(15, overrideLvl.pts + sigBonus);
-    spcRaw = overrideLvl.label + (_spcSigTor ? ' + SIG' : '');
+    spcRaw = overrideLvl.label + (_spcSigTor ? ' + ' + _spcSigTor : '');
     spcDataConfirmed = true;
   } else {
     try{
-      if(spc && spc[1]){
-        const torFeats = Array.isArray(spc[1].torProb) ? spc[1].torProb : [];
-        const sigFeats = Array.isArray(spc[1].sigTor)  ? spc[1].sigTor  : [];
+      // tornadoProb() receives spc[1] directly from renderMeteo — check spc, not spc[1]
+      if(spc && (spc.torProb || spc.confirmed)){
+        const torFeats = Array.isArray(spc.torProb) ? spc.torProb : [];
+        const sigFeats = Array.isArray(spc.sigTor)  ? spc.sigTor  : [];
+        if(spc.confirmed) spcDataConfirmed = true;
         if(torFeats.length > 0 || sigFeats.length > 0) spcDataConfirmed = true;
+
+        // GeoJSON fields: DN (integer probability), LABEL ("0.05" decimal), LABEL2 (display name)
+        // torFeats[0] is already the highest-DN hit, pre-filtered by spcPointInFeatures()
         const tp = torFeats[0]?.attributes || torFeats[0]?.properties || {};
-        const torPct = parseInt(tp.LABEL || tp.label || tp.DN || tp.dn || '0') || 0;
-        const sigBonus = sigFeats.length > 0 ? 3 : 0;
+
+        // DN is the clean integer (2,5,10,15,30,45,60); LABEL is "2%","5%"… etc.
+        let torPct = 0;
+        if(typeof tp.DN === 'number') torPct = tp.DN;
+        else if(typeof tp.dn === 'number') torPct = tp.dn;
+        else torPct = parseInt(tp.LABEL || tp.label || '0') || 0;
+
+        // CIG (Conditional Intensity Group) — replaced old SIGN hatching March 3, 2026
+        // CIG1: EF2 max (old SIGN equivalent) = +3pts
+        // CIG2: EF3 max (violent tornado potential) = +4pts
+        // CIG3: EF4+ violent/historic = +5pts (capped at 15 total)
+        const cigLabelStr = (spc.cigLabel || '').toUpperCase();
+        const sigBonus = cigLabelStr === 'CIG3' ? 5
+                       : cigLabelStr === 'CIG2' ? 4
+                       : cigLabelStr === 'CIG1' ? 3
+                       : sigFeats.length > 0   ? 3  // fallback if label missing
+                       : 0;
+
         let torPts = 0;
         if(torPct>=60)      torPts=15;
         else if(torPct>=45) torPts=14;
@@ -712,14 +735,17 @@ function tornadoProb(params){
         else if(torPct>=5)  torPts=6;
         else if(torPct>=2)  torPts=4;
         spcScore = Math.min(15, torPts + sigBonus);
-        spcRaw = torPct > 0 ? `${torPct}% tor${sigBonus?' + SIG':''}` : (spcDataConfirmed ? 'Outside areas' : '—');
+        const cigSuffix = cigLabelStr ? ` + ${cigLabelStr}` : (sigBonus>0 ? ' + SIG' : '');
+        spcRaw = torPct > 0
+          ? `${torPct}% tor${cigSuffix}`
+          : (spcDataConfirmed ? 'Outside all areas' : '—');
       }
     }catch(err){console.warn('SPC score error:',err);}
   }
 
   const spcDisplayRaw = _spcOverride>=0
     ? `MANUAL · ${SPC_LEVELS[_spcOverride].label}`
-    : (spcDataConfirmed ? (spcRaw==='—'?'Outside all areas':spcRaw) : 'No data / not yet issued');
+    : (spcDataConfirmed ? (spcRaw==='—'?'Outside all areas':spcRaw) : 'Fetching / not yet issued');
   factors.push({n:'SPC Outlook',v:spcScore,max:15,raw:spcDisplayRaw});
   total+=spcScore;
 
@@ -801,26 +827,33 @@ function renderSPCButtons(){
       color:${lvl.color};cursor:pointer;letter-spacing:.06em;">${lvl.label}</button>`;
   });
   if(_spcOverride >= 0){
-    html += `<button onclick="toggleSigTor()" style="
-      background:${_spcSigTor?'rgba(255,23,68,.18)':'var(--bg2)'};
-      border:1px solid ${_spcSigTor?'var(--danger)':'rgba(255,23,68,.3)'};
-      border-radius:3px;padding:5px 10px;font-family:var(--mono);font-size:.62rem;
-      color:${_spcSigTor?'var(--danger)':'rgba(255,23,68,.5)'};cursor:pointer;">SIG ///</button>`;
+    // CIG level buttons for manual override (CIG replaced SIGN on March 3 2026)
+    ['CIG1','CIG2','CIG3'].forEach(cig => {
+      const cigActive = _spcSigTor === cig;
+      const cigColor = cig==='CIG3'?'#ff1744':cig==='CIG2'?'#ff6b00':'#ffd600';
+      html += `<button onclick="setCIG('${cig}')" style="
+        background:${cigActive?`rgba(255,107,0,.18)`:'var(--bg2)'};
+        border:1px solid ${cigActive?cigColor:'rgba(255,107,0,.3)'};
+        border-radius:3px;padding:5px 10px;font-family:var(--mono);font-size:.62rem;
+        color:${cigActive?cigColor:'rgba(255,150,50,.6)'};cursor:pointer;">${cig}</button>`;
+    });
   }
   container.innerHTML = html;
   const statusEl = $('spc-override-status');
   if(statusEl){
-    if(_spcOverride === -1){ statusEl.textContent='AUTO'; statusEl.style.color='var(--dim)'; }
-    else{
+    if(_spcOverride === -1){
+      statusEl.textContent='AUTO · live SPC GeoJSON'; statusEl.style.color='var(--dim)';
+    } else {
       const lvl=SPC_LEVELS[_spcOverride];
-      statusEl.textContent=`MANUAL · ${lvl.label}${_spcSigTor?' + SIG':''}`;
+      statusEl.textContent=`MANUAL · ${lvl.label}${_spcSigTor?' + '+_spcSigTor:''}`;
       statusEl.style.color=_spcSigTor?'var(--danger)':lvl.color;
     }
   }
 }
 
-function toggleSigTor(){
-  _spcSigTor = !_spcSigTor;
+// _spcSigTor now holds the CIG level string ("CIG1","CIG2","CIG3") or false
+function setCIG(level){
+  _spcSigTor = (_spcSigTor === level) ? false : level; // toggle off if already selected
   renderSPCButtons();
   if(_lastMeteoData){
     try{ renderMeteo(_lastMeteoData, _lastNwsAlerts, _lastSpcData); } catch(e){ console.warn('re-render:',e); }
@@ -1073,24 +1106,80 @@ async function loadNWS(){
   };
 }
 
-const SPC_MAPSERVER='https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/SPC_wx_outlks/MapServer';
-const SPC_QUERY_PARAMS=`geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=false&f=json`;
+// ── SPC Outlook — direct GeoJSON fetch ───────────────────────────────────────
+// SPC publishes .nolyr.geojson files on spc.noaa.gov with no CORS restrictions.
+// Tornado prob: DN (integer 2/5/10/15/30/45/60), LABEL ("0.05" decimal), LABEL2
+// CIG (Conditional Intensity): implemented March 3, 2026, replaces old SIGN/sigtorn.
+//   CIG1 = EF2 max (old SIGN equivalent)
+//   CIG2 = EF3 max (violent tornado potential)
+//   CIG3 = EF4+ violent/historic outbreak level
 
-async function spcPointQuery(layerId){
-  const url=`${SPC_MAPSERVER}/${layerId}/query?geometry=${LON},${LAT}&${SPC_QUERY_PARAMS}`;
-  const r=await fetch(url);
-  if(!r.ok) throw new Error(`SPC MapServer HTTP ${r.status}`);
-  const j=await r.json();
-  if(j.error) throw new Error(`SPC error: ${j.error.message}`);
-  return Array.isArray(j.features)?j.features:[];
+const SPC_TOR_URL = 'https://www.spc.noaa.gov/products/outlook/day1otlk_torn.nolyr.geojson';
+const SPC_CIG_URL = 'https://www.spc.noaa.gov/products/outlook/day1otlk_cigtorn.nolyr.geojson';
+
+async function fetchSPCGeojson(url){
+  const r = await fetch(url, {cache:'no-cache'});
+  if(!r.ok) throw new Error(`SPC GeoJSON HTTP ${r.status}: ${url}`);
+  const j = await r.json();
+  return Array.isArray(j.features) ? j.features : [];
+}
+
+async function fetchSPCCigGeojson(){
+  return fetchSPCGeojson(SPC_CIG_URL);
+}
+
+function spcPointInFeatures(features){
+  // Returns the highest-DN (or highest-label) feature whose polygon contains Jonesboro
+  const hits = features.filter(f => {
+    try{ return f.geometry && pointInPolygon(LAT, LON, f.geometry); }
+    catch{ return false; }
+  });
+  if(!hits.length) return null;
+  hits.sort((a,b) => (b.properties?.DN ?? b.properties?.dn ?? 0) - (a.properties?.DN ?? a.properties?.dn ?? 0));
+  return hits[0];
+}
+
+// For CIG features, sort by CIG level (CIG3 > CIG2 > CIG1)
+function spcCigInFeatures(features){
+  const hits = features.filter(f => {
+    try{ return f.geometry && pointInPolygon(LAT, LON, f.geometry); }
+    catch{ return false; }
+  });
+  if(!hits.length) return null;
+  const rank = s => s==='CIG3'?3:s==='CIG2'?2:s==='CIG1'?1:0;
+  hits.sort((a,b) => {
+    const la = (a.properties?.LABEL || a.properties?.label || '').toUpperCase();
+    const lb = (b.properties?.LABEL || b.properties?.label || '').toUpperCase();
+    return rank(lb) - rank(la);
+  });
+  return hits[0];
 }
 
 async function loadSPC(){
-  const [torResult,sigResult]=await Promise.allSettled([spcPointQuery(3),spcPointQuery(2)]);
-  const torFeatures=torResult.status==='fulfilled'?torResult.value:[];
-  const sigFeatures=sigResult.status==='fulfilled'?sigResult.value:[];
-  if(torFeatures.length===0&&sigFeatures.length===0) return null;
-  return{1:{torProb:torFeatures,sigTor:sigFeatures,cat:torFeatures.length>0?torFeatures:[]}};
+  const [torResult, cigResult] = await Promise.allSettled([
+    fetchSPCGeojson(SPC_TOR_URL),
+    fetchSPCCigGeojson(),
+  ]);
+
+  const torFeatures = torResult.status === 'fulfilled' ? torResult.value : [];
+  const cigFeatures = cigResult.status === 'fulfilled' ? cigResult.value : [];
+
+  if(torResult.status === 'rejected') console.warn('SPC tor GeoJSON failed:', torResult.reason?.message);
+  if(cigResult.status === 'rejected') console.warn('SPC CIG probe failed:', cigResult.reason?.message);
+
+  const torHit = spcPointInFeatures(torFeatures);
+  const cigHit = spcCigInFeatures(cigFeatures);
+  const cigLabel = cigHit ? (cigHit.properties?.LABEL || cigHit.properties?.label || '').toUpperCase() : '';
+
+
+  return {
+    1: {
+      torProb:  torHit ? [{ properties: torHit.properties, attributes: torHit.properties }] : [],
+      sigTor:   cigHit ? [{ properties: cigHit.properties, attributes: cigHit.properties }] : [],
+      cigLabel: cigLabel,  // "CIG1", "CIG2", "CIG3", or ""
+      confirmed: torFeatures.length > 0,
+    }
+  };
 }
 
 let _aiTypewriterTimer=null;
@@ -1154,18 +1243,36 @@ function pointInPolygon(lat,lon,geometry){
 }
 
 async function loadMCD(){
-  const URLS=['https://www.spc.noaa.gov/products/md/current/md.geojson','https://mapservices.weather.noaa.gov/vector/rest/services/outlooks/spc_mesoscale_discussion/MapServer/0/query?where=1%3D1&outFields=*&f=geojson'];
-  let feats=[];
-  for(const url of URLS){
-    try{
-      const r=await fetch(url,{cache:'no-cache'});
-      if(!r.ok)continue;
-      const j=await r.json();
-      feats=Array.isArray(j.features)?j.features:[];
-      if(feats.length>=0)break;
-    }catch(e){console.warn('MCD source failed:',url,e.message);}
+  // IEM point-query JSON API — returns only MCDs covering the given lat/lon.
+  // No GeoJSON parsing or point-in-polygon needed; server does the spatial filter.
+  // Docs: https://mesonet.agron.iastate.edu/json/spcmcd.py?help=
+  const url=`https://mesonet.agron.iastate.edu/json/spcmcd.py?lat=${LAT}&lon=${LON}`;
+  try{
+    const r=await fetch(url,{cache:'no-cache'});
+    if(!r.ok) throw new Error(`IEM MCD HTTP ${r.status}`);
+    const j=await r.json();
+      // Convert IEM's format to the GeoJSON-like structure renderMCD() expects
+    if(!Array.isArray(j.data)||j.data.length===0) return[];
+    return j.data.map(m=>({
+      properties:{
+        MCDNUM:   m.num,
+        num:      m.num,
+        YEAR:     m.year,
+        year:     m.year,
+        VALID:    m.utc_issue,
+        issued:   m.utc_issue,
+        EXPIRED:  m.utc_expire,
+        expire:   m.utc_expire,
+        CONCERNING: m.concerning || m.affect || '',
+        WATCH_PROB: m.watch_prob1,
+        watch_prob: m.watch_prob1,
+      },
+      geometry: null, // not needed — server already filtered by point
+    }));
+  }catch(e){
+    console.warn('MCD IEM failed:',e.message);
+    return[];
   }
-  return feats.filter(f=>{try{return f.geometry&&pointInPolygon(LAT,LON,f.geometry);}catch{return false;}});
 }
 
 function renderMCD(mcds){
@@ -1173,12 +1280,12 @@ function renderMCD(mcds){
   if(!mcds||mcds.length===0){el.innerHTML='<div class="mcd-none">✅ No active Mesoscale Discussions for this area.</div>';return;}
   el.innerHTML=mcds.map(f=>{
     const p=f.properties||{};
-    const num=p.MCDNUM??p.mcdnum??p.NUMBER??p.number??'—';
+    const num=p.MCDNUM??p.mcdnum??p.NUMBER??p.number??p.num??p.objectid??'—';
     const year=p.YEAR??p.year??new Date().getFullYear();
-    const issued=p.VALID??p.valid??p.ISSUED??p.issued??null;
-    const expires=p.EXPIRED??p.expired??p.EXPIRE??p.expire??null;
-    const concerning=p.CONCERNING??p.concerning??p.AFFECT??p.affect??p.AREAS??p.areas??p.SUMMARY??p.summary??'';
-    const watchProb=p.WATCH_PROB??p.watch_prob??p.WATCHPROB??p.watchprob??null;
+    const issued=p.VALID??p.valid??p.ISSUED??p.issued??p.issue_time??p.utc_issue??null;
+    const expires=p.EXPIRED??p.expired??p.EXPIRE??p.expire??p.expire_time??p.utc_expire??null;
+    const concerning=p.CONCERNING??p.concerning??p.AFFECT??p.affect??p.AREAS??p.areas??p.discussion??p.DISCUSSION??p.summary??p.SUMMARY??p.name??'';
+    const watchProb=p.WATCH_PROB??p.watch_prob??p.watch_prob1??p.WATCHPROB??p.watchprob??null;
     const watchProbInt=watchProb!=null?parseInt(watchProb):null;
     const isWatchThreat=(watchProbInt!=null&&watchProbInt>=40)||String(concerning).toLowerCase().includes('tornado');
     function parseSPCTime(t){
